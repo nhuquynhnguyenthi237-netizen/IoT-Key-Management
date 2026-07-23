@@ -1,206 +1,89 @@
-# IoT Key Management System
+# IoT-Key-Management
 
-## Project Overview
+Chương trình mô phỏng **quản lý vòng đời khóa mật mã (cryptographic key
+lifecycle management)** cho hệ thống IoT, viết bằng ngôn ngữ C.
 
-This project demonstrates cryptographic key lifecycle management for IoT devices. The system simulates secure key provisioning, storage, rotation, revocation, and destruction using a simple C program.
+Đề tài 39 — Hướng F (Mật mã, khóa, xác thực và toàn vẹn)
+Học phần: Bảo mật IoT (INT4410) — Trường Đại học Văn Hiến
 
-The project was developed for the IoT Security course and follows the requirements of the Cryptography, Key Management, Authentication, and Integrity direction.
+## 1. Mục đích
 
----
+Mô phỏng 4 thao tác chính trong vòng đời khóa của một thiết bị IoT:
 
-## Security Objectives
+| Thao tác | Ý nghĩa |
+|---|---|
+| **Provision** | Sinh khóa mới và cấp phát cho thiết bị |
+| **Rotate** | Xoay vòng khóa (thay khóa cũ bằng khóa mới, tăng version) |
+| **Revoke** | Thu hồi khóa (thiết bị không còn được tin cậy) |
+| **Destroy** | Hủy khóa vĩnh viễn (xóa khỏi bộ nhớ, không thể phục hồi) |
 
-* Confidentiality: protect cryptographic keys and sensitive device data.
-* Integrity: ensure that data and keys are not modified without authorization.
-* Authentication: verify the identity of IoT devices before key operations.
-* Availability: maintain the ability to provision, rotate, revoke, and destroy keys.
+Sơ đồ trạng thái: `PROVISIONED → ACTIVE → ROTATED → REVOKED → DESTROYED`
 
----
-
-## Cryptographic Mechanisms
-
-| Mechanism   | Purpose                         |
-| ----------- | ------------------------------- |
-| AES-128     | Symmetric encryption simulation |
-| SHA-256     | Data integrity checking         |
-| HMAC-SHA256 | Message authentication          |
-| CTR_DRBG    | Random key generation           |
-| Mbed TLS    | Cryptographic library reference |
-
----
-
-## Key Lifecycle
+## 2. Cấu trúc thư mục
 
 ```
-Generate
-    ↓
-Provision
-    ↓
-Store
-    ↓
-Use
-    ↓
-Rotate
-    ↓
-Revoke
-    ↓
-Destroy
-```
-
----
-
-## Project Structure
-
-```
-IoT-Key-Management/
-│
+iot-key-management/
 ├── include/
-│   ├── device.h
-│   ├── key_manager.h
-│   └── logger.h
-│
+│   ├── device.h        # struct Device, enum KeyState
+│   ├── key_manager.h    # khai báo API quản lý khóa
+│   └── logger.h         # khai báo API ghi log
 ├── src/
-│   ├── device.c
-│   ├── key_manager.c
-│   ├── logger.c
-│   └── main.c
-│
-├── README.md
-├── .gitignore
-└── policy.md
+│   ├── main.c           # menu tương tác + chế độ demo tự động
+│   ├── key_manager.c     # cài đặt Provision/Rotate/Revoke/Destroy
+│   └── logger.c          # ghi log có timestamp ra console + file
+├── logs/
+│   └── system.log        # log sinh ra khi chạy chương trình (không commit log thật)
+├── Makefile
+└── README.md
 ```
 
----
+## 3. Yêu cầu môi trường
 
-## Build Instructions
+- GCC (khuyến nghị 11.0 trở lên), chuẩn C11
+- Hệ điều hành: Windows (MSYS2/MinGW), Linux hoặc macOS đều chạy được
 
-Compile the program using GCC.
+## 4. Biên dịch và chạy
 
 ```bash
-gcc src/main.c src/device.c src/key_manager.c src/logger.c -Iinclude -o iot.exe
+make            # bien dich ra file thuc thi iot_keymgr
+./iot_keymgr    # chay che do menu tuong tac
 ```
 
-Run the program:
+Chạy chế độ demo tự động (dùng để tái hiện các kịch bản kiểm thử
+TC-01 → TC-06 dùng làm minh chứng trong báo cáo):
 
 ```bash
-./iot.exe
+make demo
+# hoac
+./iot_keymgr --demo
 ```
 
-On Windows:
+Kết quả demo được in ra console **và** ghi vào `logs/system.log`.
 
-```bash
-iot.exe
-```
+## 5. Kịch bản kiểm thử (Valid / Invalid)
 
----
+| ID | Kịch bản | Kết quả mong đợi |
+|---|---|---|
+| TC-01 | Provision thiết bị mới hợp lệ | OK |
+| TC-02 | Rotate khóa trên thiết bị đang active | OK |
+| TC-03 | Rotate trên thiết bị không tồn tại | Từ chối (NOT_FOUND) |
+| TC-04 | Rotate sau khi đã Revoke | Từ chối (INVALID_STATE) |
+| TC-05 | Revoke sau khi đã Destroy | Từ chối (INVALID_STATE) |
+| TC-06 | Provision trùng ID thiết bị | Từ chối (DUPLICATE_ID) |
 
-## Program Menu
+## 6. Quy tắc an toàn (áp dụng trong repo này)
 
-```
-1. Show Devices
-2. Provision Key
-3. Rotate Key
-4. Revoke Key
-5. Destroy Key
-6. Provision All Devices
-0. Exit
-```
+- Khóa hiển thị trên console/log **luôn được che (mask)** — chỉ hiện 2
+  byte đầu, phần còn lại thay bằng `**`. Không bao giờ in toàn bộ khóa
+  thật ra ngoài, kể cả ở chế độ demo.
+- Khóa sinh ra bằng `rand()` **chỉ phục vụ mô phỏng/học tập**. Sản phẩm
+  thật phải dùng bộ sinh số ngẫu nhiên an toàn (CSPRNG), ví dụ
+  `RAND_bytes` của OpenSSL hoặc `/dev/urandom`.
+- File `logs/*.log` sinh ra khi chạy chương trình không chứa khóa thật
+  và không được commit dữ liệu nhạy cảm lên GitHub.
+- Không có secret, token hoặc mật khẩu thật nào được lưu trong repo này.
 
----
+## 7. Tác giả
 
-## Sample Input and Output
-
-Input:
-
-```
-Choose: 2
-Enter Device ID (1-5): 3
-```
-
-Output:
-
-```
-Provisioning key...
-
-Device ID : 3
-Status    : ACTIVE
-
-Key:
-A8 4F 32 91
-6D E7 15 B0
-4C 21 D8 7A
-19 93 62 FE
-
-Provision Successful.
-```
-
----
-
-## Test Parameters
-
-| Parameter             | Value               |
-| --------------------- | ------------------- |
-| Number of devices     | 5                   |
-| Key size              | 16 bytes (128 bits) |
-| Language              | C                   |
-| Compiler              | GCC                 |
-| Platform              | Windows 11          |
-| Cryptographic library | Mbed TLS reference  |
-
----
-
-## Resource and Time Measurements
-
-| Operation     | Example Time |
-| ------------- | ------------ |
-| Provision Key | 0.14 ms      |
-| Rotate Key    | 0.16 ms      |
-| Revoke Key    | 0.05 ms      |
-| Destroy Key   | 0.03 ms      |
-
-| Resource     | Example Value    |
-| ------------ | ---------------- |
-| Flash memory | ~80 KB           |
-| RAM usage    | ~20 KB           |
-| Key storage  | 16 bytes per key |
-
----
-
-## Valid and Invalid Tests
-
-| Test Case             | Input                  | Expected Output       | Result |
-| --------------------- | ---------------------- | --------------------- | ------ |
-| Valid Provision       | Device 2               | Provision Successful  | PASS   |
-| Valid Rotate          | Device 2               | Rotate Successful     | PASS   |
-| Valid Revoke          | Device 2               | Key Revoked           | PASS   |
-| Invalid Device ID     | Device 10              | Invalid Device ID     | PASS   |
-| Rotate without key    | Device not provisioned | No Active Key         | PASS   |
-| Destroy destroyed key | Already destroyed      | Key Already Destroyed | PASS   |
-
----
-
-## Security Notice
-
-This project uses randomly generated demonstration keys only.
-
-No real cryptographic keys, certificates, passwords, or secrets are included in this repository.
-
-This complies with the requirement that no real secret keys be uploaded to GitHub.
-
----
-
-## References
-
-* OWASP IoT Security Verification Standard
-* Mbed TLS
-* TinyCrypt
-
----
-
-## Author
-
-Nguyễn Thị Như Quỳnh
-
-Faculty of Information Technology
-
-Van Hien University
+Nguyễn Thị Như Quỳnh — MSSV 231A010815 — Lớp 253INT441001
+GVHD: Hồ Nhật Minh
