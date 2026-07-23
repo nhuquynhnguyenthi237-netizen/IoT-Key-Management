@@ -1,0 +1,8 @@
+logs/
+*.log
+keys.txt
+*.exe
+iot_keymgr
+*.o
+*.out
+build/

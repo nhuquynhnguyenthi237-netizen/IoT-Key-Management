@@ -1,17 +1,27 @@
 #ifndef DEVICE_H
 #define DEVICE_H
 
-#include "key_manager.h"
 #include <stdint.h>
+
+#define KEY_SIZE 32
+#define MAX_DEVICES 10
+
+typedef enum {
+    PROVISIONED,
+    ACTIVE,
+    ROTATED,
+    REVOKED,
+    DESTROYED
+} KeyState;
 
 typedef struct {
     int id;
-    Key key;
-    int status; // 0: inactive, 1: active, 2: revoked, 3: destroyed
+    uint8_t key[KEY_SIZE];
+    KeyState state;
+    int key_active;
 } Device;
 
-void initDevice(Device *device, int id);
-void printDevice(Device *device);
-void printKey(const uint8_t key[]);
+void init_device(Device *dev, int id);
+void display_device(const Device *dev);
 
 #endif

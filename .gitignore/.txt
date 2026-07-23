@@ -1,5 +1,0 @@
-keys.txt
-logs.txt
-iot.exe
-*.exe
-.vscode/

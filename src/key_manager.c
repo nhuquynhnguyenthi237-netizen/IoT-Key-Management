@@ -1,134 +1,166 @@
 #include "key_manager.h"
+#include "logger.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-// #define USE_MBEDTLS   // Bỏ comment nếu dùng Mbed TLS
+static Device devices[MAX_DEVICES];
+static int device_count = 0;
 
-#ifdef USE_MBEDTLS
-#include <mbedtls/ctr_drbg.h>
-#include <mbedtls/entropy.h>
-#endif
-
-void generateKey(uint8_t *key, size_t size) {
-#ifdef USE_MBEDTLS
-    mbedtls_entropy_context entropy;
-    mbedtls_ctr_drbg_context ctr_drbg;
-    const char *pers = "iot_key_gen";
-    mbedtls_entropy_init(&entropy);
-    mbedtls_ctr_drbg_init(&ctr_drbg);
-    mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
-                          (const unsigned char*)pers, strlen(pers));
-    mbedtls_ctr_drbg_random(&ctr_drbg, key, size);
-    mbedtls_ctr_drbg_free(&ctr_drbg);
-    mbedtls_entropy_free(&entropy);
-#else
+static void generate_key(uint8_t *key, size_t len) {
     static int seeded = 0;
     if (!seeded) {
-        srand((unsigned int)time(NULL));
+        srand((unsigned)time(NULL));
         seeded = 1;
     }
-    for (size_t i = 0; i < size; i++) {
+    for (size_t i = 0; i < len; i++) {
         key[i] = (uint8_t)(rand() % 256);
     }
-#endif
 }
 
-void provisionKey(Key *key) {
-    key->is_active = 1;
-    printf("Key provisioned.\n");
-}
-
-void storeKey(const Key *key, int device_id) {
-    FILE *fp = fopen("keys.txt", "a");
-    if (fp) {
-        fprintf(fp, "Device %d key: ", device_id);
-        for (int i = 0; i < KEY_SIZE; i++) {
-            fprintf(fp, "%02x", key->key[i]);
-        }
-        fprintf(fp, " (active=%d)\n", key->is_active);
-        fclose(fp);
+static Device* find_device(const char *id) {
+    int num = atoi(id);
+    for (int i = 0; i < device_count; i++) {
+        if (devices[i].id == num)
+            return &devices[i];
     }
+    return NULL;
 }
 
-void rotateKey(Key *key) {
-    generateKey(key->key, KEY_SIZE);
-    key->is_active = 1;
-    printf("Key rotated.\n");
+int provision_device(const char *id) {
+    if (find_device(id) != NULL) {
+        log_message("ERROR", "Provision failed: DUPLICATE_ID");
+        return -3;
+    }
+    if (device_count >= MAX_DEVICES) {
+        log_message("ERROR", "Provision failed: MAX_DEVICES");
+        return -4;
+    }
+
+    Device *dev = &devices[device_count++];
+    init_device(dev, atoi(id));
+    generate_key(dev->key, KEY_SIZE);
+    dev->state = PROVISIONED;
+    dev->key_active = 1;
+
+    log_message("INFO", "Device provisioned");
+    printf("Device %s provisioned. Key: ", id);
+    print_masked_key(dev->key, KEY_SIZE);
+    printf("\n");
+    return 0;
 }
 
-void revokeKey(Key *key) {
-    key->is_active = 0;
-    printf("Key revoked.\n");
+int rotate_key(const char *id) {
+    Device *dev = find_device(id);
+    if (dev == NULL) {
+        log_message("ERROR", "Rotate failed: NOT_FOUND");
+        return -1;
+    }
+    if (dev->state == REVOKED || dev->state == DESTROYED) {
+        log_message("ERROR", "Rotate failed: INVALID_STATE");
+        return -2;
+    }
+
+    generate_key(dev->key, KEY_SIZE);
+    dev->state = (dev->state == PROVISIONED) ? ACTIVE : ROTATED;
+    dev->key_active = 1;
+
+    log_message("INFO", "Key rotated");
+    printf("Device %s rotated. New Key: ", id);
+    print_masked_key(dev->key, KEY_SIZE);
+    printf("\n");
+    return 0;
 }
 
-void destroyKey(Key *key) {
-    memset(key->key, 0, KEY_SIZE);
-    key->is_active = -1;
-    printf("Key destroyed.\n");
+int revoke_device(const char *id) {
+    Device *dev = find_device(id);
+    if (dev == NULL) {
+        log_message("ERROR", "Revoke failed: NOT_FOUND");
+        return -1;
+    }
+    if (dev->state == DESTROYED) {
+        log_message("ERROR", "Revoke failed: INVALID_STATE");
+        return -2;
+    }
+
+    dev->state = REVOKED;
+    dev->key_active = 0;
+    log_message("INFO", "Device revoked");
+    printf("Device %s revoked.\n", id);
+    return 0;
 }
 
-void saveKeys(Key *keys, int num_devices) {
-    FILE *fp = fopen("keys.txt", "w");
+int destroy_device(const char *id) {
+    Device *dev = find_device(id);
+    if (dev == NULL) {
+        log_message("ERROR", "Destroy failed: NOT_FOUND");
+        return -1;
+    }
+
+    dev->state = DESTROYED;
+    dev->key_active = -1;
+    memset(dev->key, 0, KEY_SIZE);
+    log_message("INFO", "Device destroyed");
+    printf("Device %s destroyed.\n", id);
+    return 0;
+}
+
+int get_device_count(void) {
+    return device_count;
+}
+
+Device* get_device_at(int index) {
+    if (index >= 0 && index < device_count)
+        return &devices[index];
+    return NULL;
+}
+
+void save_keys(const char *filename) {
+    FILE *fp = fopen(filename, "w");
     if (!fp) {
-        perror("Cannot open keys.txt for writing");
+        log_message("ERROR", "Cannot save keys");
         return;
     }
-    for (int i = 0; i < num_devices; i++) {
-        fprintf(fp, "Device %d key: ", i);
+    for (int i = 0; i < device_count; i++) {
+        fprintf(fp, "%d ", devices[i].id);
         for (int j = 0; j < KEY_SIZE; j++) {
-            fprintf(fp, "%02x", keys[i].key[j]);
+            fprintf(fp, "%02x", devices[i].key[j]);
         }
-        fprintf(fp, " (active=%d)\n", keys[i].is_active);
+        fprintf(fp, " %d\n", devices[i].key_active);
     }
     fclose(fp);
-    printf("[Save] All keys saved to keys.txt\n");
+    log_message("INFO", "Keys saved");
+    printf("[Save] All keys saved to %s\n", filename);
 }
 
-void loadKeys(Key *keys, int num_devices) {
-    FILE *fp = fopen("keys.txt", "r");
+void load_keys(const char *filename) {
+    FILE *fp = fopen(filename, "r");
     if (!fp) {
-        perror("Cannot open keys.txt for reading");
+        log_message("ERROR", "Cannot load keys");
         return;
     }
-    char line[512];
-    int device_id = 0;
-    while (fgets(line, sizeof(line), fp) && device_id < num_devices) {
-        // Tìm "key: "
-        char *key_start = strstr(line, "key: ");
-        if (!key_start) continue;
-        key_start += 5; // bỏ qua "key: "
-
-        // Tìm "(active="
-        char *paren = strstr(key_start, " (active=");
-        if (!paren) continue;
-        *paren = '\0';  // tách phần hex
-
-        // Parse hex key (32 bytes)
-        int len = (int)strlen(key_start);
-        if (len >= KEY_SIZE * 2) {
-            for (int j = 0; j < KEY_SIZE; j++) {
-                unsigned int byte;
-                if (sscanf(key_start + 2 * j, "%2x", &byte) != 1) {
-                    break;
-                }
-                keys[device_id].key[j] = (uint8_t)byte;
-            }
+    device_count = 0;
+    int id, active;
+    uint8_t key[KEY_SIZE];
+    while (fscanf(fp, "%d ", &id) == 1) {
+        for (int i = 0; i < KEY_SIZE; i++) {
+            unsigned int byte;
+            fscanf(fp, "%02x", &byte);
+            key[i] = (uint8_t)byte;
         }
-
-        // Parse active status – dùng strtol để tránh lỗi do ký tự xuống dòng
-        char *num_start = paren + 9; // bỏ qua "(active=" (9 ký tự)
-        char *endptr;
-        long val = strtol(num_start, &endptr, 10);
-        if (endptr > num_start) {
-            keys[device_id].is_active = (int)val;
-        } else {
-            keys[device_id].is_active = -1; // không parse được
+        fscanf(fp, "%d", &active);
+        if (device_count < MAX_DEVICES) {
+            devices[device_count].id = id;
+            memcpy(devices[device_count].key, key, KEY_SIZE);
+            devices[device_count].key_active = active;
+            if (active == 1)      devices[device_count].state = ACTIVE;
+            else if (active == 0) devices[device_count].state = REVOKED;
+            else                  devices[device_count].state = DESTROYED;
+            device_count++;
         }
-
-        device_id++;
     }
     fclose(fp);
-    printf("[Load] Keys loaded from keys.txt\n");
+    log_message("INFO", "Keys loaded");
+    printf("[Load] Keys loaded from %s\n", filename);
 }
